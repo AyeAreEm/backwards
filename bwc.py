@@ -23,7 +23,7 @@ class TokenType(enum.Enum):
 @dataclass
 class Token:
     typ: TokenType
-    value: Any # union
+    value: Any
 
     @staticmethod
     def get_token(buf: str):
@@ -89,7 +89,6 @@ def lexer(file: str) -> List[Token]:
             tokens.append(token)
             buf = ""
         elif ch == '\n':
-            print(f"lexer buf: {buf}")
             token = Token.get_token(buf)
             tokens.append(token)
             tokens.append(Token(TokenType.Newline, '\n'))
@@ -98,23 +97,11 @@ def lexer(file: str) -> List[Token]:
             buf += ch
 
     tokens.append(Token.get_token(buf))
-
-    token, tokentyp = expect(tokens, TokenType.EoF)
-    if tokentyp != TokenType.EoF:
-        print(f"unexpected token '{token.value}' of type: {tokentyp}")
-        exit(1)
-    tokens.append(token)
-
-    token, tokentyp = expect(tokens, TokenType.Newline)
-    if tokentyp != TokenType.Newline:
-        print(f"unexpected token '{token.value}' of type: {tokentyp}")
-        exit(1)
-
     return tokens
 
 def peek(tokens: List[Token], index = 0):
     if index >= len(tokens):
-        return Token(TokenType.EoF, "EoF")
+        return None
 
     return tokens[index]
 
@@ -165,7 +152,12 @@ def parse_math_expr(tokens: List[Token]) -> Expr:
     return stack[0]
 
 def parse_expr(tokens: List[Token]):
-    if peek(tokens).typ == TokenType.Number:
+    token = peek(tokens)
+    if token == None:
+        print("got none when parsing expression")
+        exit(1)
+
+    if token.typ == TokenType.Number:
         return parse_math_expr(tokens)
 
 def parse_return(tokens: List[Token]):
@@ -173,8 +165,15 @@ def parse_return(tokens: List[Token]):
     return Stmnt(StmntType.Return, [parse_expr(tokens)])
 
 def parse(tokens: List[Token]):
-    if peek(tokens).typ == TokenType.Return:
+    token = peek(tokens)
+    if token == None:
+        return
+
+    if token.typ == TokenType.Return:
         return parse_return(tokens)
+    elif token.typ == TokenType.EoF or token.typ == TokenType.Newline:
+        next(tokens)
+        return parse(tokens)
 
 def emit_exprs(file, exprs: List[Expr]):
     if len(exprs) == 0:
@@ -210,11 +209,8 @@ def main():
         content = file.read()[::-1]
         tokens = lexer(content)
 
-        print(tokens)
-
         with open(file.name + ".bc", "w+") as bc_file:
             while (stmnt := parse(tokens)):
-                # stmnt.pretty(0)
                 emit(bc_file, stmnt)
 
 if __name__ == "__main__":
