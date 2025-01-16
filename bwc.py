@@ -5,6 +5,34 @@ from typing import List
 import sys
 import enum
 
+class SymbolTable:
+    symbols = {}
+    curr_addr = 0
+
+    @staticmethod
+    def find(key):
+        if key not in SymbolTable.symbols:
+            print(f"couldn't find {key} in symbol table")
+            exit(1)
+
+        return SymbolTable.symbols[key]
+
+    @staticmethod
+    def push(key, value):
+        if key not in SymbolTable.symbols:
+            addr = SymbolTable.get_next_addr(value)
+            SymbolTable.symbols[key] = (addr, value)
+            return SymbolTable.symbols[key][0]
+
+        print(f"symbol {key} already in symbol table, can't push to table")
+        exit(1)
+
+    @staticmethod
+    def get_next_addr(typeinfo: TypeInfo):
+        v = SymbolTable.curr_addr + (typeinfo.alignment - 1)
+        SymbolTable.curr_addr = (v & ~(typeinfo.alignment - 1)) + typeinfo.size
+        return SymbolTable.curr_addr - typeinfo.size
+
 def usage():
     print("USAGE:")
     print("    bwc.py <file.bw>")
@@ -17,8 +45,16 @@ class TokenType(enum.Enum):
     Divide   = enum.auto()
     Number   = enum.auto()
     Return   = enum.auto()
+    Print    = enum.auto()
     EoF      = enum.auto()
     Newline  = enum.auto()
+    Let      = enum.auto()
+    Ident    = enum.auto()
+    Equal    = enum.auto()
+    Dot      = enum.auto()
+    I128     = enum.auto()
+    U128     = enum.auto()
+    Undef    = enum.auto()
 
 @dataclass
 class Token:
@@ -29,25 +65,33 @@ class Token:
     def get_token(buf: str):
         if buf.isdigit():
             return Token(TokenType.Number, buf)
-        elif buf == '+':
-            return Token(TokenType.Plus, buf)
-        elif buf == '-':
-            return Token(TokenType.Minus, buf)
-        elif buf == '*':
-            return Token(TokenType.Multiply, buf)
-        elif buf == '/':
-            return Token(TokenType.Divide, buf)
-        elif buf == "return":
-            return Token(TokenType.Return, buf)
-        else:
-            return Token(TokenType.EoF, "EoF")
+
+        match buf:
+            case "return":
+                return Token(TokenType.Return, buf)
+            case "print":
+                return Token(TokenType.Print, buf)
+            case "let":
+                return Token(TokenType.Let, buf)
+            case "i128":
+                return Token(TokenType.I128, buf)
+            case "u128":
+                return Token(TokenType.U128, buf)
+            case "undef":
+                return Token(TokenType.Undef, buf)
+            case _:
+                return Token(TokenType.Ident, buf)
+                
 
 class StmntType(enum.Enum):
-    Return = 0
+    Return  = enum.auto()
+    VarDecl = enum.auto()
+    Print   = enum.auto()
 
 @dataclass
 class Stmnt:
     typ: StmntType
+    typeinfo: TypeInfo
     children: List
 
     def pretty(self, indent):
@@ -59,15 +103,17 @@ class Stmnt:
             child.pretty(indent + 1)
 
 class ExprType(enum.Enum):
-    Plus = 0
-    Minus = 1
-    Mulitply = 2
-    Divide = 3
-    IntLit = 4
+    Plus     = enum.auto()
+    Minus    = enum.auto()
+    Mulitply = enum.auto()
+    Divide   = enum.auto()
+    IntLit   = enum.auto()
+    Ident    = enum.auto()
 
 @dataclass
 class Expr:
     typ: ExprType
+    typeinfo: TypeInfo|None
     value: Any
     children: List[Expr]
 
@@ -79,29 +125,56 @@ class Expr:
         for child in self.children:
             child.pretty(indent + 1)
 
+class Type(enum.Enum):
+    I128 = enum.auto()
+    U128 = enum.auto()
+
+@dataclass
+class TypeInfo:
+    size: int
+    alignment: int
+    typ: Type
+
 def lexer(file: str) -> List[Token]:
+    def try_push_token(tokens, buf, extra_token):
+        if len(buf) > 0:
+            tokens.append(Token.get_token(buf))
+
+        if extra_token != None:
+            tokens.append(extra_token)
+
+        return ""
+
     tokens = []
     buf: str = ""
 
     for ch in file:
-        if ch == ' ':
-            token = Token.get_token(buf)
-            tokens.append(token)
-            buf = ""
-        elif ch == '\n':
-            token = Token.get_token(buf)
-            tokens.append(token)
-            tokens.append(Token(TokenType.Newline, '\n'))
-            buf = ""
-        else:
-            buf += ch
+        match ch:
+            case ' ':
+                buf = try_push_token(tokens, buf, None)
+            case '\n':
+                buf = try_push_token(tokens, buf, Token(TokenType.Newline, '\n'))
+            case '+':
+                buf = try_push_token(tokens, buf, Token(TokenType.Plus, '+'))
+            case '-':
+                buf = try_push_token(tokens, buf, Token(TokenType.Minus, '-'))
+            case '*':
+                buf = try_push_token(tokens, buf, Token(TokenType.Multiply, '*'))
+            case '/':
+                buf = try_push_token(tokens, buf, Token(TokenType.Divide, '/'))
+            case '=':
+                buf = try_push_token(tokens, buf, Token(TokenType.Equal, '='))
+            case '.':
+                buf = try_push_token(tokens, buf, Token(TokenType.Dot, '.'))
+            case _:
+                buf += ch
 
-    tokens.append(Token.get_token(buf))
+    try_push_token(tokens, buf, None)
     return tokens
 
 def peek(tokens: List[Token], index = 0):
     if index >= len(tokens):
-        return None
+        return Token(TokenType.EoF, "EoF")
 
     return tokens[index]
 
@@ -111,14 +184,28 @@ def next(tokens: List[Token]):
 
     return tokens.pop(0)
 
-def expect(tokens: List[Token], expected: TokenType) -> tuple[Token, TokenType]:
+def expect(tokens: List[Token], expected: TokenType) -> Token:
     token = next(tokens)
     if expected != token.typ:
-        return token, token.typ
+        print(f"expected {expected}, got {token}")
+        exit(1)
 
-    return token, token.typ
+    return token
 
-def parse_math_expr(tokens: List[Token]) -> Expr:
+def parse_type(tokens: List[Token]) -> TypeInfo:
+    token = next(tokens)
+    match token.typ:
+        case TokenType.I128:
+            return TypeInfo(16, 16, Type.I128)
+        case TokenType.U128:
+            return TypeInfo(16, 16, Type.U128)
+        case _:
+            print(f"expected a type, found {token}")
+            exit(1)
+
+def parse_expr(tokens: List[Token]):
+    token = peek(tokens)
+
     stack = []
 
     while (sym := peek(tokens)):
@@ -131,73 +218,152 @@ def parse_math_expr(tokens: List[Token]) -> Expr:
             case TokenType.Plus:
                 right = stack.pop()
                 left = stack.pop()
-                stack.append(Expr(ExprType.Plus, '+', [left, right]))
+                assert left.typeinfo == right.typeinfo
+
+                stack.append(Expr(ExprType.Plus, left.typeinfo, '+', [left, right]))
             case TokenType.Minus:
                 right = stack.pop()
                 left = stack.pop()
-                stack.append(Expr(ExprType.Minus, '-', [left, right]))
+                assert left.typeinfo == right.typeinfo
+
+                stack.append(Expr(ExprType.Minus, left.typeinfo, '-', [left, right]))
             case TokenType.Multiply:
                 right = stack.pop()
                 left = stack.pop()
-                stack.append(Expr(ExprType.Mulitply, '*', [left, right]))
+                assert left.typeinfo == right.typeinfo
+
+                stack.append(Expr(ExprType.Mulitply, left.typeinfo, '*', [left, right]))
             case TokenType.Divide:
                 right = stack.pop()
                 left = stack.pop()
-                stack.append(Expr(ExprType.Divide, '/', [left, right]))
+                assert left.typeinfo == right.typeinfo
+
+                stack.append(Expr(ExprType.Divide, left.typeinfo, '/', [left, right]))
             case TokenType.Number:
-                stack.append(Expr(ExprType.IntLit, token.value, []))
+                expect(tokens, TokenType.Dot)
+                vartype = parse_type(tokens)
+                stack.append(Expr(ExprType.IntLit, vartype, token.value, []))
+            case TokenType.Ident:
+                addr, typeinfo = SymbolTable.find(token.value)
+                stack.append(Expr(ExprType.Ident, typeinfo, addr, []))
             case _:
                 break
 
     return stack[0]
 
-def parse_expr(tokens: List[Token]):
-    token = peek(tokens)
-    if token == None:
-        print("got none when parsing expression")
-        exit(1)
-
-    if token.typ == TokenType.Number:
-        return parse_math_expr(tokens)
-
 def parse_return(tokens: List[Token]):
     expect(tokens, TokenType.Return)
-    return Stmnt(StmntType.Return, [parse_expr(tokens)])
+    expr = parse_expr(tokens)
+    assert expr != None
+    assert expr.typeinfo != None
+    return Stmnt(StmntType.Return, expr.typeinfo, [expr])
+
+def parse_print(tokens: List[Token]):
+    expect(tokens, TokenType.Print)
+    expr = parse_expr(tokens)
+    assert expr != None
+    assert expr.typeinfo != None
+    return Stmnt(StmntType.Print, expr.typeinfo, [expr])
+
+def parse_vardecl(tokens: List[Token]):
+    expect(tokens, TokenType.Let)
+    varname = expect(tokens, TokenType.Ident)
+    expect(tokens, TokenType.Equal)
+
+    value = parse_expr(tokens)
+    assert value != None
+    assert value.typeinfo != None
+
+    addr = SymbolTable.push(varname.value, value.typeinfo)
+    
+    return Stmnt(StmntType.VarDecl, value.typeinfo, [addr, value])
 
 def parse(tokens: List[Token]):
     token = peek(tokens)
     if token == None:
         return
 
-    if token.typ == TokenType.Return:
-        return parse_return(tokens)
-    elif token.typ == TokenType.EoF or token.typ == TokenType.Newline:
-        next(tokens)
-        return parse(tokens)
+    match token.typ:
+        case TokenType.Return:
+            return parse_return(tokens)
+        case TokenType.Print:
+            return parse_print(tokens)
+        case TokenType.Let:
+            return parse_vardecl(tokens)
+        case TokenType.EoF:
+            return
+        case TokenType.Newline:
+            next(tokens)
+            return parse(tokens)
 
-def emit_exprs(file, exprs: List[Expr]):
-    if len(exprs) == 0:
-        return
+def typ_to_string(typ: Type) -> str:
+    match typ:
+        case Type.I128:
+            return "i128"
+        case Type.U128:
+            return "u128"
 
-    for expr in exprs:
-        match expr.typ:
-            case ExprType.IntLit:
-                file.write(f"PUSH {expr.value}\n")
-            case ExprType.Plus:
-                emit_exprs(file, expr.children)
-                file.write("ADD\n")
-            case ExprType.Mulitply:
-                emit_exprs(file, expr.children)
-                file.write("MUL\n")
+def emit_expr(expr: Expr):
+    match expr.typ:
+        case ExprType.Ident:
+            return [f"GET {expr.value}"]
+        case ExprType.IntLit:
+            return [f"PUSH {hex(int(expr.value))}"]
+        case ExprType.Plus:
+            assert expr.typeinfo != None
+            str_typ = typ_to_string(expr.typeinfo.typ)
+            res = []
+            for child in expr.children:
+                res.extend(emit_expr(child))
 
-def emit_return(file, stmnt: Stmnt):
-    emit_exprs(file, stmnt.children)
-    file.write("RET\n")
+            return res + [f"ADD.{str_typ}"]
+        case ExprType.Mulitply:
+            assert expr.typeinfo != None
+            str_typ = typ_to_string(expr.typeinfo.typ)
+            res = []
+            for child in expr.children:
+                res.extend(emit_expr(child))
 
-def emit(file, stmnt: Stmnt):
+            return res + [f"MUL.{str_typ}"]
+        case ExprType.Minus:
+            assert expr.typeinfo != None
+            str_typ = typ_to_string(expr.typeinfo.typ)
+            res = []
+            for child in expr.children:
+                res.extend(emit_expr(child))
+
+            return res + [f"SUB.{str_typ}"]
+        case ExprType.Divide:
+            assert expr.typeinfo != None
+            str_typ = typ_to_string(expr.typeinfo.typ)
+            res = []
+            for child in expr.children:
+                res.extend(emit_expr(child))
+
+            return res + [f"DIV.{str_typ}"]
+
+def emit_return(stmnt: Stmnt):
+    assert stmnt.typeinfo != None
+    str_typ = typ_to_string(stmnt.typeinfo.typ)
+    return emit_expr(stmnt.children[0]) + [f"RET.{str_typ}"]
+
+def emit_print(stmnt: Stmnt):
+    assert stmnt.typeinfo != None
+    str_typ = typ_to_string(stmnt.typeinfo.typ)
+    return emit_expr(stmnt.children[0]) + [f"PRINT.{str_typ}"]
+
+def emit_vardecl(stmnt: Stmnt):
+    addr, expr, *_ = stmnt.children
+    return [*emit_expr(expr)] + [f"SET {addr}"]
+
+def emit(stmnt: Stmnt):
     match stmnt.typ:
         case StmntType.Return:
-            emit_return(file, stmnt)
+            return emit_return(stmnt)
+        case StmntType.Print:
+            return emit_print(stmnt)
+        case StmntType.VarDecl:
+            return emit_vardecl(stmnt)
         
 def main():
     args = sys.argv[1:]
@@ -209,9 +375,14 @@ def main():
         content = file.read()[::-1]
         tokens = lexer(content)
 
+        instructs = []
         with open(file.name + ".bc", "w+") as bc_file:
-            while (stmnt := parse(tokens)):
-                emit(bc_file, stmnt)
+            while (stmnt := parse(tokens)) is not None:
+                instructs += emit(stmnt)
+
+            instructs = [f"PREALLOC {SymbolTable.curr_addr}"] + instructs
+            bc_file_content = '\n'.join(instructs)
+            bc_file.write(bc_file_content)
 
 if __name__ == "__main__":
     main()
