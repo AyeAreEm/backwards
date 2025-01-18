@@ -54,6 +54,9 @@ class TokenType(enum.Enum):
     Dot      = enum.auto()
     I128     = enum.auto()
     U128     = enum.auto()
+    B128     = enum.auto()
+    true     = enum.auto()
+    false    = enum.auto()
     Undef    = enum.auto()
 
 @dataclass
@@ -77,8 +80,14 @@ class Token:
                 return Token(TokenType.I128, buf)
             case "u128":
                 return Token(TokenType.U128, buf)
+            case "b128":
+                return Token(TokenType.B128, buf)
             case "undef":
                 return Token(TokenType.Undef, buf)
+            case "true":
+                return Token(TokenType.true, buf)
+            case "false":
+                return Token(TokenType.false, buf)
             case _:
                 return Token(TokenType.Ident, buf)
                 
@@ -108,6 +117,7 @@ class ExprType(enum.Enum):
     Mulitply = enum.auto()
     Divide   = enum.auto()
     IntLit   = enum.auto()
+    BoolLit  = enum.auto()
     Ident    = enum.auto()
 
 @dataclass
@@ -128,6 +138,7 @@ class Expr:
 class Type(enum.Enum):
     I128 = enum.auto()
     U128 = enum.auto()
+    B128 = enum.auto()
 
 @dataclass
 class TypeInfo:
@@ -209,6 +220,8 @@ def parse_type(tokens: List[Token]) -> TypeInfo:
             return TypeInfo(16, 16, Type.I128)
         case TokenType.U128:
             return TypeInfo(16, 16, Type.U128)
+        case TokenType.B128:
+            return TypeInfo(16, 16, Type.B128)
         case _:
             print(f"expected a type, found {token}")
             exit(1)
@@ -256,6 +269,8 @@ def parse_expr(tokens: List[Token]):
             case TokenType.Ident:
                 addr, typeinfo = SymbolTable.find(token.value)
                 stack.append(Expr(ExprType.Ident, typeinfo, addr, []))
+            case TokenType.true | TokenType.false:
+                stack.append(Expr(ExprType.BoolLit, TypeInfo(16, 16, Type.B128), 0 if token.value == "false" else 1, []))
             case _:
                 break
 
@@ -293,6 +308,7 @@ def parse(tokens: List[Token]):
     if token == None:
         return
 
+    # TODO: numbers or strings without any "statement" should just be pushed
     match token.typ:
         case TokenType.Return:
             return parse_return(tokens)
@@ -312,6 +328,8 @@ def typ_to_string(typ: Type) -> str:
             return "i128"
         case Type.U128:
             return "u128"
+        case Type.B128:
+            return "b128"
 
 def emit_expr(expr: Expr):
     match expr.typ:
@@ -319,6 +337,8 @@ def emit_expr(expr: Expr):
             return [f"GET {expr.value}"]
         case ExprType.IntLit:
             return [f"PUSH {hex(int(expr.value))}; {expr.value}"]
+        case ExprType.BoolLit:
+            return [f"PUSH {hex(int(expr.value))}; {"false" if expr.value == 0 else "true"}"]
         case ExprType.Plus:
             assert expr.typeinfo != None
             str_typ = typ_to_string(expr.typeinfo.typ)

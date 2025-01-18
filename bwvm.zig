@@ -340,6 +340,7 @@ pub const String = struct {
 const Type = enum {
     I128,
     U128,
+    B128,
 };
 
 const TypeInfo = struct {
@@ -352,6 +353,8 @@ const TypeInfo = struct {
             return .{ TypeInfo{ .size = 16, .alignment = 16, .typ = .I128 }, 4 };
         } else if (std.mem.eql(u8, buf[0..4], "u128")) {
             return .{ TypeInfo{ .size = 16, .alignment = 16, .typ = .U128 }, 4 };
+        } else if (std.mem.eql(u8, buf[0..4], "b128")) {
+            return .{ TypeInfo{ .size = 16, .alignment = 16, .typ = .B128 }, 4 };
         }
 
         // TODO: change this to not bug out when there's more types
@@ -451,6 +454,14 @@ const Opcode = union(enum) {
             },
             .U128 => {
                 return @as(*u128, @alignCast(@ptrCast(op(left, right)))).*;
+            },
+            .B128 => {
+                if (op == Opcode.print) {
+                    _ = op(if (left > 0) true else false, right);
+                } else {
+                    std.debug.print("boolean operators not yet implemented", .{});
+                }
+                return left;
             },
         }
     }

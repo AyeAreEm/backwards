@@ -12,12 +12,14 @@ endif
 
 syntax match Symbols /\v[|$+%-;.:=<>!&^()[\]{}*\/]/
 syntax keyword Keywords nruter tnirp tel
-syntax keyword TypeNames 821i 821u
+syntax keyword TypeNames 821i 821u 821b
 syntax match Number "\<\d\+\>\(\w\)\@!"
+syntax keyword TrueFalse eurt eslaf
 
 highlight link Keywords Keyword
 highlight link Symbols Operator
 highlight link TypeNames Type
 highlight link Number Number
+highlight link TrueFalse Function
 
 let b:current_syntax = "backwards"
