@@ -147,8 +147,16 @@ def lexer(file: str) -> List[Token]:
 
     tokens = []
     buf: str = ""
+    is_comment = False
 
     for ch in file:
+        if is_comment:
+            if ch == '\n':
+                is_comment = False
+            elif ch == '#':
+                is_comment = False
+            continue
+
         match ch:
             case ' ':
                 buf = try_push_token(tokens, buf, None)
@@ -166,6 +174,8 @@ def lexer(file: str) -> List[Token]:
                 buf = try_push_token(tokens, buf, Token(TokenType.Equal, '='))
             case '.':
                 buf = try_push_token(tokens, buf, Token(TokenType.Dot, '.'))
+            case '#':
+                is_comment = True
             case _:
                 buf += ch
 
@@ -308,7 +318,7 @@ def emit_expr(expr: Expr):
         case ExprType.Ident:
             return [f"GET {expr.value}"]
         case ExprType.IntLit:
-            return [f"PUSH {hex(int(expr.value))}"]
+            return [f"PUSH {hex(int(expr.value))}; {expr.value}"]
         case ExprType.Plus:
             assert expr.typeinfo != None
             str_typ = typ_to_string(expr.typeinfo.typ)

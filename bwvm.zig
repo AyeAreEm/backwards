@@ -488,11 +488,21 @@ fn get_opcodes(line: []const u8) !Dyn(Opcode) {
     var buf = try String.init(allocator);
     defer buf.deinit();
 
+    var is_comment = false;
     for (line) |ch| {
+        if (is_comment) {
+            if (ch == '\n') {
+                is_comment = false;
+            }
+            continue;
+        }
+
         if (ch == '\n') {
             buf.toLowercase();
             try opcodes.push(try Opcode.get_op(buf.getSlice()));
             buf.clear();
+        } else if (ch == ';') {
+            is_comment = true;
         } else if (ch == '\r') {
             continue;
         } else {
