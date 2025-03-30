@@ -49,6 +49,9 @@ class TokenType(enum.Enum):
     EoF      = enum.auto()
     Newline  = enum.auto()
     Let      = enum.auto()
+    If       = enum.auto()
+    Else     = enum.auto()
+    End      = enum.auto()
     Ident    = enum.auto()
     Equal    = enum.auto()
     Dot      = enum.auto()
@@ -88,6 +91,12 @@ class Token:
                 return Token(TokenType.true, buf)
             case "false":
                 return Token(TokenType.false, buf)
+            case "if":
+                return Token(TokenType.If, buf)
+            case "else":
+                return Token(TokenType.Else, buf)
+            case "end":
+                return Token(TokenType.End, buf)
             case _:
                 return Token(TokenType.Ident, buf)
                 
@@ -96,6 +105,7 @@ class StmntType(enum.Enum):
     Return  = enum.auto()
     VarDecl = enum.auto()
     Print   = enum.auto()
+    If      = enum.auto()
 
 @dataclass
 class Stmnt:
@@ -226,13 +236,13 @@ def parse_type(tokens: List[Token]) -> TypeInfo:
             print(f"expected a type, found {token}")
             exit(1)
 
-def parse_expr(tokens: List[Token]):
+def parse_expr_until(tokens: List[Token], delimiter: TokenType):
     token = peek(tokens)
 
     stack = []
 
     while (sym := peek(tokens)):
-        if sym.typ == TokenType.EoF or sym.typ == TokenType.Newline:
+        if sym.typ == TokenType.EoF or sym.typ == delimiter:
             next(tokens)
             break
 
@@ -278,14 +288,14 @@ def parse_expr(tokens: List[Token]):
 
 def parse_return(tokens: List[Token]):
     expect(tokens, TokenType.Return)
-    expr = parse_expr(tokens)
+    expr = parse_expr_until(tokens, TokenType.Newline)
     assert expr != None
     assert expr.typeinfo != None
     return Stmnt(StmntType.Return, expr.typeinfo, [expr])
 
 def parse_print(tokens: List[Token]):
     expect(tokens, TokenType.Print)
-    expr = parse_expr(tokens)
+    expr = parse_expr_until(tokens, TokenType.Newline)
     assert expr != None
     assert expr.typeinfo != None
     return Stmnt(StmntType.Print, expr.typeinfo, [expr])
@@ -295,13 +305,36 @@ def parse_vardecl(tokens: List[Token]):
     varname = expect(tokens, TokenType.Ident)
     expect(tokens, TokenType.Equal)
 
-    value = parse_expr(tokens)
+    value = parse_expr_until(tokens, TokenType.Newline)
     assert value != None
     assert value.typeinfo != None
 
     addr = SymbolTable.push(varname.value, value.typeinfo)
     
     return Stmnt(StmntType.VarDecl, value.typeinfo, [addr, value])
+
+def parse_block(tokens: List[Token]) -> List[Stmnt]:
+    body = []
+    while (stmnt := parse(tokens)) is not None:
+        body.append(stmnt)
+
+    return body
+
+def parse_if(tokens: List[Token]):
+    expect(tokens, TokenType.If)
+    condition = parse_expr_until(tokens, TokenType.Newline)
+    assert condition.typeinfo == TypeInfo(16, 16, Type.B128)
+
+    if_body = parse_block(tokens)
+
+    else_body = []
+    if peek(tokens).typ == TokenType.Else:
+        next(tokens)
+        else_body = parse_block(tokens)
+
+    expect(tokens, TokenType.End)
+
+    return Stmnt(StmntType.If, condition.typeinfo, [condition, if_body, else_body])
 
 def parse(tokens: List[Token]):
     token = peek(tokens)
@@ -316,6 +349,8 @@ def parse(tokens: List[Token]):
             return parse_print(tokens)
         case TokenType.Let:
             return parse_vardecl(tokens)
+        case TokenType.If:
+            return parse_if(tokens)
         case TokenType.EoF:
             return
         case TokenType.Newline:
@@ -386,6 +421,36 @@ def emit_vardecl(stmnt: Stmnt):
     addr, expr, *_ = stmnt.children
     return [*emit_expr(expr)] + [f"SET {addr}"]
 
+def emit_block(stmnts: List[Stmnt]):
+    body = []
+    for stmnt in stmnts:
+        body += emit(stmnt)
+
+    return body
+
+def emit_cmp():
+    return [f"CMP"]
+
+def emit_jeq(offset):
+    return [f"JEQ {offset}"]
+
+def emit_jmp(offset):
+    return [f"JMP {offset}"]
+
+def emit_if(stmnt: Stmnt):
+    cond, if_body, else_body = stmnt.children
+
+    cond_bc = emit_expr(cond)
+    false_bc = emit_expr(Expr(ExprType.BoolLit, TypeInfo(16, 16, Type.B128), 0, []))
+    cmp_bc = emit_cmp()
+
+    if_bbc = emit_block(if_body)
+    jmp_if_bc = emit_jmp(len(if_bbc))
+    else_bbc = emit_block(else_body)
+    jeq_else_bc = emit_jeq(len(if_bbc) + 1)
+
+    return cond_bc + false_bc + cmp_bc + jeq_else_bc + if_bbc + jmp_if_bc + else_bbc
+
 def emit(stmnt: Stmnt):
     match stmnt.typ:
         case StmntType.Return:
@@ -394,6 +459,8 @@ def emit(stmnt: Stmnt):
             return emit_print(stmnt)
         case StmntType.VarDecl:
             return emit_vardecl(stmnt)
+        case StmntType.If:
+            return emit_if(stmnt)
         
 def main():
     args = sys.argv[1:]

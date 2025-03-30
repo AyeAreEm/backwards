@@ -372,6 +372,9 @@ const Opcode = union(enum) {
     Div: TypeInfo,
     Set: usize,
     Get: usize,
+    Cmp: struct {},
+    Jeq: isize,
+    Jmp: isize,
 
     pub fn handle_typed_op(op: []const u8, optype: TypeInfo, rest: []const u8) Opcode {
         _ = rest;
@@ -389,6 +392,7 @@ const Opcode = union(enum) {
         } else if (std.mem.eql(u8, op, "print")) {
             return Opcode{ .Print = optype };
         }
+
         std.debug.print("op: {s}\n", .{op});
         unreachable;
     }
@@ -415,6 +419,22 @@ const Opcode = union(enum) {
             }
 
             std.debug.panic("failed to parse memory location during get opcode", .{});
+        } else if (std.mem.eql(u8, op, "cmp")) {
+            return Opcode{ .Cmp = .{} };
+        } else if (std.mem.eql(u8, op, "jeq")) {
+            const index = std.fmt.parseInt(isize, rest, 10) catch null;
+            if (index) |i| {
+                return Opcode{ .Jeq = i };
+            }
+
+            std.debug.panic("failed to parse memory location during get opcode", .{});
+        } else if (std.mem.eql(u8, op, "jmp")) {
+            const index = std.fmt.parseInt(isize, rest, 10) catch null;
+            if (index) |i| {
+                return Opcode{ .Jmp = i };
+            }
+
+            std.debug.panic("failed to parse memory location during get opcode", .{});
         }
 
         std.debug.print("op: {s}\n", .{op});
@@ -425,20 +445,26 @@ const Opcode = union(enum) {
         // WARN: if opcode is bigger than 10 then lols doesn't work get fucked, make it bigger
         var op: [10]u8 = undefined;
         var op_end: usize = undefined;
+        var edited_op_end = false;
         for (buf, 0..) |ch, i| {
             if (!std.ascii.isAlphabetic(ch)) {
                 op_end = i;
+                edited_op_end = true;
                 break;
             }
 
             op[i] = ch;
         }
+        if (!edited_op_end) op_end = buf.len;
 
-        if (buf[op_end] == '.') {
+        if (edited_op_end and buf[op_end] == '.') {
             const optype = buf[op_end + 1 ..]; // TODO: watch this bad boy right here cuz he might either be a "" or error
             const info = TypeInfo.from_str(optype);
             return handle_typed_op(op[0..op_end], info[0], optype[info[1]..]);
         } else {
+            if (!edited_op_end) {
+                return handle_untyped_op(op[0..op_end], op[0..op_end]);
+            }
             return handle_untyped_op(op[0..op_end], buf[op_end + 1 ..]);
         }
 
@@ -527,11 +553,16 @@ fn get_opcodes(line: []const u8) !Dyn(Opcode) {
     return opcodes;
 }
 
-fn interpret(line: []const u8, stack: *Dyn(u128), memory: *[]u8) !void {
+fn interpret(line: []const u8, skip_lines: *isize, stack: *Dyn(u128), memory: *[]u8) !void {
     var opcodes = try get_opcodes(line);
 
     while (opcodes.at(0)) |opcode| {
         _ = try opcodes.remove(0);
+
+        if (skip_lines.* != 0) {
+            skip_lines.* -= 1;
+            continue;
+        }
 
         switch (opcode) {
             .Add => |typeinfo| {
@@ -624,6 +655,30 @@ fn interpret(line: []const u8, stack: *Dyn(u128), memory: *[]u8) !void {
                 const value = storage[index];
                 try stack.push(value);
             },
+            .Cmp => {
+                const right = stack.pop();
+                const left = stack.pop();
+                if (left) |lhs| {
+                    if (right) |rhs| {
+                        if (lhs == rhs) {
+                            try stack.push(1);
+                        } else {
+                            try stack.push(0);
+                        }
+                    }
+                }
+            },
+            .Jeq => |offset| {
+                const value = stack.pop();
+                if (value) |v| {
+                    if (v == 1) {
+                        skip_lines.* = offset;
+                    }
+                }
+            },
+            .Jmp => |offset| {
+                skip_lines.* = offset;
+            },
         }
     }
 }
@@ -649,6 +704,7 @@ pub fn main() !void {
         var is_start = true;
         var buf: [1024]u8 = undefined;
         var memory: []u8 = undefined;
+        var skip_lines: isize = 0;
 
         while (try in_stream.readUntilDelimiterOrEof(&buf, '\n')) |line| {
             if (is_start) {
@@ -661,7 +717,7 @@ pub fn main() !void {
                 continue;
             }
 
-            try interpret(line, &stack, &memory);
+            try interpret(line, &skip_lines, &stack, &memory);
         }
 
         // std.debug.print("memory: {any}", .{memory});

@@ -11,7 +11,7 @@ if exists("b:current_syntax")
 endif
 
 syntax match Symbols /\v[|$+%-;.:=<>!&^()[\]{}*\/]/
-syntax keyword Keywords nruter tnirp tel
+syntax keyword Keywords nruter tnirp tel fi dne esle
 syntax keyword TypeNames 821i 821u 821b
 syntax match Number "\<\d\+\>\(\w\)\@!"
 syntax keyword TrueFalse eurt eslaf
